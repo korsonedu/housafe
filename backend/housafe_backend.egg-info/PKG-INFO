@@ -1,0 +1,18 @@
+Metadata-Version: 2.4
+Name: housafe-backend
+Version: 0.1.0
+Requires-Python: >=3.12
+Requires-Dist: django>=5.0
+Requires-Dist: djangorestframework>=3.15
+Requires-Dist: djangorestframework-simplejwt>=5.3
+Requires-Dist: channels>=4.0
+Requires-Dist: channels-redis>=4.2
+Requires-Dist: daphne>=4.1
+Requires-Dist: psycopg[binary]>=3.1
+Requires-Dist: pydantic>=2.6
+Requires-Dist: dj-database-url>=2.1
+Requires-Dist: python-dotenv>=1.0
+Provides-Extra: dev
+Requires-Dist: pytest>=8; extra == "dev"
+Requires-Dist: pytest-django>=4.8; extra == "dev"
+Requires-Dist: pytest-asyncio>=0.23; extra == "dev"

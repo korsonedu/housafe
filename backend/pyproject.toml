@@ -13,6 +13,7 @@ dependencies = [
   "pydantic>=2.6",
   "dj-database-url>=2.1",
   "python-dotenv>=1.0",
+  "housafe-contracts",
 ]
 
 [project.optional-dependencies]

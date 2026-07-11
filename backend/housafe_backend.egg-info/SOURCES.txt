@@ -1,0 +1,6 @@
+pyproject.toml
+housafe_backend.egg-info/PKG-INFO
+housafe_backend.egg-info/SOURCES.txt
+housafe_backend.egg-info/dependency_links.txt
+housafe_backend.egg-info/requires.txt
+housafe_backend.egg-info/top_level.txt

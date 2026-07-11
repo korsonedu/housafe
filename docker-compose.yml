@@ -1,0 +1,14 @@
+services:
+  db:
+    image: timescale/timescaledb:2.15.0-pg16
+    environment:
+      POSTGRES_DB: housafe
+      POSTGRES_USER: housafe
+      POSTGRES_PASSWORD: housafe
+    ports: ["5432:5432"]
+    volumes: ["dbdata:/var/lib/postgresql/data"]
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+volumes:
+  dbdata:

@@ -22,3 +22,4 @@ urlpatterns = [
 ]
 
 urlpatterns += [path("api/auth/", include("accounts.urls"))]
+urlpatterns += [path("api/", include("families.urls"))]

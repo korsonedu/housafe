@@ -24,3 +24,4 @@ urlpatterns = [
 urlpatterns += [path("api/auth/", include("accounts.urls"))]
 urlpatterns += [path("api/", include("families.urls"))]
 urlpatterns += [path("api/", include("devices.urls"))]
+urlpatterns += [path("api/", include("events.urls"))]

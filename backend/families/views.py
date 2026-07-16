@@ -1,4 +1,5 @@
 from rest_framework import viewsets
+from django.shortcuts import get_object_or_404
 from .models import Family, Elder, Contact
 from .serializers import FamilySerializer, ElderSerializer, ContactSerializer
 
@@ -12,7 +13,7 @@ class FamilyViewSet(viewsets.ModelViewSet):
 class _ChildViewSet(viewsets.ModelViewSet):
     child_model = None
     def _family(self):
-        return Family.objects.get(id=self.kwargs["family_id"], owner=self.request.user)
+        return get_object_or_404(Family, id=self.kwargs["family_id"], owner=self.request.user)
     def get_queryset(self):
         return self.child_model.objects.filter(family=self._family())
     def perform_create(self, serializer):

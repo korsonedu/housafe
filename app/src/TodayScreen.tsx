@@ -128,8 +128,21 @@ export default function TodayScreen({ token, onLogout }: Props) {
     ws.onmessage = (e) => {
       try {
         const msg = JSON.parse(e.data);
-        if (msg.type === "event.push" && msg.data) {
-          mergeUpdate(msg.data);
+        if (!msg.kind || !msg.payload) return;
+        const p = msg.payload;
+        if (msg.kind === "posture") {
+          mergeUpdate({
+            room_name: p.room,
+            device_online: true,
+            posture: p.posture,
+          });
+        } else if (msg.kind === "vital") {
+          mergeUpdate({
+            room_name: p.room,
+            device_online: true,
+            heart_rate: p.heart_rate,
+            breath_rate: p.resp_rate,
+          });
         }
       } catch {
         // ignore malformed messages

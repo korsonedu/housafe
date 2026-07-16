@@ -17,4 +17,8 @@ def test_today_returns_latest_per_room(api):
         store_event(did,"posture",parse_event("posture",
             {"ts":1700000000000+seq,"radar_id":did,"room":"bed","seq":seq,"posture":p,"confidence":0.9}),ts_recv=0)
     r = api.get(f"/api/families/{fid}/today")
-    assert r.status_code == 200 and r.data["bed"]["posture"]["posture"] == "walk"
+    assert r.status_code == 200
+    rooms = r.data["rooms"]
+    assert len(rooms) == 1
+    assert rooms[0]["room_name"] == "bed"
+    assert rooms[0]["posture"] == "walk"

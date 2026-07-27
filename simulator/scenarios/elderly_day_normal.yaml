@@ -1,0 +1,76 @@
+# 老人日常 - 正常半天（示例场景）
+name: "老人日常 - 正常半天"
+version: 1
+device_id: rad_elderly_01
+
+rooms:
+  bedroom:
+    size: [4.0, 3.5, 2.8]
+    radar_pos: [2.0, 3.0, 2.5]
+  living:
+    size: [5.0, 4.0, 2.8]
+    radar_pos: [2.5, 3.5, 2.5]
+
+vitals:
+  resting_hr: 68
+  resting_rr: 15
+
+generator_defaults:
+  method: synthetic
+  fps: 10
+
+annotations:
+  output: output/
+  format: jsonl
+
+timeline:
+  # 7:00 起床
+  - at: 0s
+    room: bedroom
+    activity: lie
+    duration: 10s
+    generator: synthetic
+
+  - at: 10s
+    room: bedroom
+    activity: sit
+    duration: 10s
+    transition: {from: lie, to: sit, duration: 3s}
+
+  # 走向客厅
+  - at: 20s
+    room: bedroom
+    activity: walk
+    duration: 10s
+
+  - at: 30s
+    room: living
+    activity: walk
+    duration: 10s
+
+  # 客厅沙发坐着
+  - at: 40s
+    room: living
+    activity: sit
+    duration: 30s
+
+  # 客厅走动
+  - at: 70s
+    room: living
+    activity: walk
+    duration: 10s
+
+  - at: 80s
+    room: living
+    activity: stand
+    duration: 10s
+
+injections:
+  - at: 35s
+    type: fall
+    room: living
+    params:
+      height_drop_rate: 0.8
+    ground_truth:
+      severity: critical
+      desc: "客厅行走时滑倒"

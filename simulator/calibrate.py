@@ -39,7 +39,8 @@ def fit_action_gmm(points_list: list[np.ndarray], k: int = GMM_K_DEFAULT) -> Gau
     n_components = min(k, len(all_points) // 10)
     n_components = max(1, n_components)
     gmm = GaussianMixture(n_components=n_components, random_state=RANDOM_SEED,
-                          covariance_type="full", max_iter=200)
+                          covariance_type="full", max_iter=200,
+                          reg_covar=1e-4)
     gmm.fit(all_points)
     return gmm
 
@@ -134,12 +135,12 @@ def save_params(params: dict[str, GMMParams], out_path: str):
         save_dict[f"{name}_weights"] = p.gmm_weights
         save_dict[f"{name}_means"] = p.gmm_means
         save_dict[f"{name}_covs"] = p.gmm_covariances
-        save_dict[f"{name}_pt_lambda"] = np.array([p.point_count_lambda])
-        save_dict[f"{name}_vel_mean"] = np.array([p.velocity_mean])
-        save_dict[f"{name}_vel_std"] = np.array([p.velocity_std])
-        save_dict[f"{name}_int_alpha"] = np.array([p.intensity_alpha])
-        save_dict[f"{name}_int_beta"] = np.array([p.intensity_beta])
-        save_dict[f"{name}_max_disp"] = np.array([p.max_displacement])
+        save_dict[f"{name}_pt_lambda"] = np.array(p.point_count_lambda)
+        save_dict[f"{name}_vel_mean"] = np.array(p.velocity_mean)
+        save_dict[f"{name}_vel_std"] = np.array(p.velocity_std)
+        save_dict[f"{name}_int_alpha"] = np.array(p.intensity_alpha)
+        save_dict[f"{name}_int_beta"] = np.array(p.intensity_beta)
+        save_dict[f"{name}_max_disp"] = np.array(p.max_displacement)
     np.savez_compressed(out_path, **save_dict)
 
 

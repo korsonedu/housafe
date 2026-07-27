@@ -1,4 +1,5 @@
 """点云生成器 — GMM 合成 + 3DPCHM 回放"""
+import warnings
 import numpy as np
 from collections import defaultdict
 from simulator.calibrate import GMMParams, load_params, ACTION_NAMES
@@ -47,9 +48,11 @@ class SyntheticGenerator:
             nk = mask.sum()
             if nk == 0:
                 continue
-            raw_xyz[mask] = self._rng.multivariate_normal(
-                p.gmm_means[k], p.gmm_covariances[k], size=nk,
-            )
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)
+                raw_xyz[mask] = self._rng.multivariate_normal(
+                    p.gmm_means[k], p.gmm_covariances[k], size=nk,
+                )
 
         # 3. 时间平滑：限制质心位移
         centroid = raw_xyz.mean(axis=0)

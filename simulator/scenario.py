@@ -154,6 +154,9 @@ class ScenarioEngine:
             if points is not None and len(points) > 0:
                 prev_centroid = points[:, :3].mean(axis=0)
 
+            # 保存 body-centered 原始点云（世界模型用）
+            raw = points.copy() if points is not None and len(points) > 0 else None
+
             # 将 body-centered 点云平移到房间雷达正下方（地面位置）
             if points is not None and len(points) > 0 and room_name in self._room_configs:
                 cfg = self._room_configs[room_name]
@@ -186,7 +189,7 @@ class ScenarioEngine:
             frames.append(FrameGroup(
                 frame_id=frame_id, ts=int(t * 1000),
                 device_id=self._device_id, room=room_name,
-                points=points, vitals=vitals, gt=gt,
+                points=points, raw_points=raw, vitals=vitals, gt=gt,
             ))
 
         return frames
@@ -212,6 +215,9 @@ class ScenarioEngine:
             if points is not None and len(points) > 0:
                 prev_centroid = points[:, :3].mean(axis=0)
 
+            # 保存 body-centered 原始点云
+            raw = points.copy() if points is not None and len(points) > 0 else None
+
             # 平移到房间雷达正下方
             if points is not None and len(points) > 0 and room in self._room_configs:
                 cfg = self._room_configs[room]
@@ -227,7 +233,7 @@ class ScenarioEngine:
             frames.append(FrameGroup(
                 frame_id=f"{self._device_id}-{self._frame_seq:06d}",
                 ts=int(t * 1000), device_id=self._device_id, room=room,
-                points=points, vitals=vitals,
+                points=points, raw_points=raw, vitals=vitals,
                 gt=GroundTruth(
                     frame_id=f"{self._device_id}-{self._frame_seq:06d}",
                     ts=int(t * 1000), posture=posture,

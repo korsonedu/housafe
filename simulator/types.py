@@ -49,7 +49,8 @@ class FrameGroup:
     ts: int                  # UTC ms
     device_id: str
     room: str
-    points: np.ndarray | None = None    # (N,5) float32 [x,y,z,velocity,intensity]
+    points: np.ndarray | None = None    # (N,5) float32 RoomModel 变换后
+    raw_points: np.ndarray | None = None # (N,5) float32 body-centered（世界模型用）
     vitals: VitalRecord | None = None
     gt: GroundTruth | None = None
     heartbeat: bool = False             # True=心跳帧（无点云/体征，仅保活）

@@ -100,19 +100,25 @@ class ReplayGenerator:
 
     def generate_sequence(self, action: str, duration_s: float,
                           subject_ids: list[int] | None = None) -> list[np.ndarray]:
-        """返回按时间排序的帧列表"""
+        """返回按时间排序的帧列表（单被试连续序列，保证时序一致性）"""
         action_id = ACTION_NAMES.index(action) if action in ACTION_NAMES else 0
-        subjects = set(subject_ids) if subject_ids else set()
+        target_subjects = set(subject_ids) if subject_ids else set()
 
-        candidates = []
+        # 找有该动作的被试
+        available_subjects = set()
         for (aid, sid), indices in self._index.items():
-            if aid == action_id and (not subjects or sid in subjects):
-                candidates.extend(indices)
+            if aid == action_id and (not target_subjects or sid in target_subjects):
+                if len(indices) > 0:
+                    available_subjects.add(sid)
 
-        if not candidates:
+        if not available_subjects:
             return []
 
-        candidates.sort(key=lambda i: self._frames[i])
+        # 选一个被试，确保时序连续
+        sid = (list(target_subjects)[0] if target_subjects
+               else list(available_subjects)[self._rng.randint(0, len(available_subjects))])
+
+        candidates = sorted(self._index[(action_id, sid)], key=lambda i: self._frames[i])
 
         fps = 10
         n_frames = max(1, int(duration_s * fps))

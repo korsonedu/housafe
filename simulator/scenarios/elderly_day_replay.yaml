@@ -1,0 +1,57 @@
+# 老人日常 - replay 模式（3DPCHM 真实点云 + 世界模型）
+name: "老人日常 - replay"
+version: 1
+device_id: rad_elderly_01
+
+rooms:
+  living:
+    size: [5.0, 4.0, 2.8]
+    radar_pos: [2.5, 2.0, 1.4]
+
+vitals:
+  resting_hr: 68
+  resting_rr: 15
+
+generator_defaults:
+  method: replay
+  fps: 10
+
+timeline:
+  # 站立
+  - at: 0s
+    room: living
+    activity: stand
+    duration: 5s
+    generator: replay
+
+  # 走路
+  - at: 5s
+    room: living
+    activity: walk
+    duration: 10s
+    generator: replay
+
+  # 坐下
+  - at: 15s
+    room: living
+    activity: sit
+    duration: 5s
+    generator: replay
+
+  # 再走路
+  - at: 20s
+    room: living
+    activity: walk
+    duration: 10s
+    generator: replay
+
+injections:
+  - at: 12s
+    type: fall
+    room: living
+    params:
+      height_drop_rate: 0.8
+      transition_duration: 1.0
+    ground_truth:
+      severity: critical
+      desc: "行走时跌倒"

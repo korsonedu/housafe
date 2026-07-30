@@ -1,0 +1,70 @@
+# 混合异常 — 跌倒 + 静止 + 体征恶化
+name: "混合异常"
+version: 1
+device_id: rad_test
+
+rooms:
+  living:
+    size: [5.0, 4.0, 2.8]
+    radar_pos: [2.5, 2.0, 1.4]
+
+vitals:
+  resting_hr: 72
+  resting_rr: 16
+
+generator_defaults:
+  method: replay
+  fps: 10
+
+timeline:
+  - at: 0s
+    room: living
+    activity: stand
+    duration: 5s
+    generator: replay
+
+  - at: 5s
+    room: living
+    activity: walk
+    duration: 10s
+    generator: replay
+
+  - at: 15s
+    room: living
+    activity: sit
+    duration: 60s
+    generator: replay
+
+injections:
+  # 跌倒
+  - at: 7s
+    type: fall
+    room: living
+    params:
+      height_drop_rate: 0.8
+      transition_duration: 1.0
+    ground_truth:
+      severity: critical
+      desc: "行走跌倒"
+
+  # 静止超时
+  - at: 30s
+    type: stillness
+    room: living
+    params:
+      min_duration_s: 30
+    ground_truth:
+      severity: warning
+      desc: "跌倒后长时间静止"
+
+  # 体征恶化
+  - at: 50s
+    type: vital_anomaly
+    room: living
+    params:
+      ramp_duration_s: 15
+      hr_range: [72, 42]
+      rr_range: [16, 7]
+    ground_truth:
+      severity: critical
+      desc: "体征逐渐恶化"

@@ -1,0 +1,36 @@
+# 设备离线 — 雷达断连
+name: "设备离线"
+version: 1
+device_id: rad_test
+
+rooms:
+  living:
+    size: [5.0, 4.0, 2.8]
+    radar_pos: [2.5, 2.0, 1.4]
+
+generator_defaults:
+  method: replay
+  fps: 10
+
+timeline:
+  - at: 0s
+    room: living
+    activity: walk
+    duration: 5s
+    generator: replay
+
+  - at: 5s
+    room: living
+    activity: sit
+    duration: 40s
+    generator: replay
+
+injections:
+  - at: 10s
+    type: offline
+    room: living
+    params:
+      gap_duration_s: 35
+    ground_truth:
+      severity: critical
+      desc: "设备断连"

@@ -1,0 +1,38 @@
+# 静止超时 — 长时间静坐不动
+name: "静止超时"
+version: 1
+device_id: rad_test
+
+rooms:
+  living:
+    size: [5.0, 4.0, 2.8]
+    radar_pos: [2.5, 2.0, 1.4]
+
+generator_defaults:
+  method: replay
+  fps: 10
+
+timeline:
+  # 先正常走几步（建立基线）
+  - at: 0s
+    room: living
+    activity: walk
+    duration: 5s
+    generator: replay
+
+  # 坐下，长时间不动
+  - at: 5s
+    room: living
+    activity: sit
+    duration: 120s
+    generator: replay
+
+injections:
+  - at: 30s
+    type: stillness
+    room: living
+    params:
+      min_duration_s: 60
+    ground_truth:
+      severity: warning
+      desc: "客厅长时间静止不动"

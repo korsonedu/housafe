@@ -1,0 +1,41 @@
+# 生命体征危机 — 心率/呼吸逐步恶化
+name: "生命体征危机"
+version: 1
+device_id: rad_test
+
+rooms:
+  bedroom:
+    size: [4.0, 3.5, 2.8]
+    radar_pos: [2.0, 1.75, 1.4]
+
+vitals:
+  resting_hr: 72
+  resting_rr: 16
+
+generator_defaults:
+  method: synthetic
+  fps: 10
+
+timeline:
+  - at: 0s
+    room: bedroom
+    activity: lie
+    duration: 20s
+    generator: synthetic
+
+  - at: 20s
+    room: bedroom
+    activity: sit
+    duration: 10s
+
+injections:
+  - at: 5s
+    type: vital_anomaly
+    room: bedroom
+    params:
+      ramp_duration_s: 15
+      hr_range: [72, 38]
+      rr_range: [16, 5]
+    ground_truth:
+      severity: critical
+      desc: "卧床心率呼吸逐步下降"

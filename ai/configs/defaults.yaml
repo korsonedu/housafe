@@ -1,0 +1,23 @@
+# 家安世界模型 Phase A 默认配置
+redis_url: "redis://localhost:6379/0"
+backend_url: "http://localhost:8000"
+internal_token: "dev-internal-token"
+
+feature_buffer_maxlen: 1000
+state_persist_dir: "/tmp/housafe_ai_state"
+state_persist_interval_s: 300   # 每 5 分钟持久化一次
+
+fallback:
+  enable_fall: true
+  enable_stillness: true
+  enable_vital: true
+  enable_offline: true
+
+notification:
+  suppress_window_s: 300
+
+baseline:
+  min_days: 14
+
+graph:
+  min_stay_frames: 60

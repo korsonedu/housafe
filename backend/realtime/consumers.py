@@ -38,6 +38,9 @@ class AppConsumer(AsyncJsonWebsocketConsumer):
     async def event_push(self, event):
         await self.send_json({"kind": event["kind"], "payload": event["payload"]})
 
+    async def room_state(self, event):
+        await self.send_json(event["payload"])
+
     async def disconnect(self, code):
         if hasattr(self, "group"):
             await self.channel_layer.group_discard(self.group, self.channel_name)

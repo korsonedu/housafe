@@ -128,6 +128,12 @@ export default function TodayScreen({ token, onLogout }: Props) {
     ws.onmessage = (e) => {
       try {
         const msg = JSON.parse(e.data);
+        // v3.0: room.state 推送完整房间状态
+        if (msg.type === "room.state") {
+          mergeUpdate(msg);
+          return;
+        }
+        // v2.x backward compat: 离散事件推送
         if (!msg.kind || !msg.payload) return;
         const p = msg.payload;
         if (msg.kind === "posture") {

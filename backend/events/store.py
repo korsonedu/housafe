@@ -1,18 +1,72 @@
-from django.db import IntegrityError, transaction
-from .models import PostureRow, PresenceRow, VitalRow, OccupancyRow
+import time
+from housafe_contracts.events import (
+    DecoderPosture,
+    DecoderVital,
+    DecoderAlert,
+    DecoderOccupancy,
+    DecoderAnomaly,
+    DecoderOutput,
+)
+from .models import RoomState, Alert
 
-_MAP = {"posture":PostureRow,"presence":PresenceRow,"vital":VitalRow,"occupancy":OccupancyRow}
-_FIELDS = {
-    "posture": lambda m: {"posture":m.posture,"confidence":m.confidence},
-    "presence": lambda m: {"presence":m.presence,"moving":m.moving},
-    "vital": lambda m: {"quiet":m.quiet,"resp_rate":m.resp_rate,"heart_rate":m.heart_rate,"quality":m.quality},
-    "occupancy": lambda m: {"count":m.count},
-}
-def store_event(device_id, kind, model, ts_recv):
-    Row = _MAP[kind]
-    try:
-        with transaction.atomic():
-            Row.objects.create(ts=model.ts, ts_recv=ts_recv, device_id=device_id,
-                               room=model.room, seq=model.seq, **_FIELDS[kind](model))
-    except IntegrityError:
-        pass  # 幂等：重复 (device_id, seq) 忽略
+
+def store_decoder_output(device_id: str, room: str, output: DecoderOutput, ts_recv: int | None = None):
+    """接收 Decoder 输出，更新 RoomState / 创建 Alert"""
+    if ts_recv is None:
+        ts_recv = int(time.time() * 1000)
+
+    if isinstance(output, DecoderPosture):
+        RoomState.objects.update_or_create(
+            device_id=device_id,
+            defaults={
+                "room": room,
+                "ts": output.ts,
+                "ts_recv": ts_recv,
+                "posture": output.posture,
+                "confidence": output.confidence,
+                "presence": output.presence,
+                "moving": output.moving,
+            },
+        )
+    elif isinstance(output, DecoderVital):
+        RoomState.objects.update_or_create(
+            device_id=device_id,
+            defaults={
+                "room": room,
+                "ts": output.ts,
+                "ts_recv": ts_recv,
+                "resp_rate": output.resp_rate,
+                "heart_rate": output.heart_rate,
+                "quality": output.quality,
+            },
+        )
+    elif isinstance(output, DecoderAlert):
+        Alert.objects.create(
+            device_id=device_id,
+            room=room,
+            ts=output.ts,
+            ts_recv=ts_recv,
+            alert_type=output.alert_type,
+            severity=output.severity,
+            payload=output.payload,
+        )
+    elif isinstance(output, DecoderOccupancy):
+        RoomState.objects.update_or_create(
+            device_id=device_id,
+            defaults={
+                "room": room,
+                "ts": output.ts,
+                "ts_recv": ts_recv,
+                "occupancy_count": output.count,
+            },
+        )
+    elif isinstance(output, DecoderAnomaly):
+        RoomState.objects.update_or_create(
+            device_id=device_id,
+            defaults={
+                "room": room,
+                "ts": output.ts,
+                "ts_recv": ts_recv,
+                "anomaly_score": output.anomaly_score,
+            },
+        )

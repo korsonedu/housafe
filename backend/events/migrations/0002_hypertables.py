@@ -9,8 +9,11 @@ SELECT create_hypertable('events_occupancyrow','ts',chunk_time_interval=>8640000
 
 def apply_hypertables(apps, schema_editor):
     if schema_editor.connection.vendor != 'postgresql':
-        return  # SQLite etc：无法使用 Timescale，静默跳过
+        return
     with schema_editor.connection.cursor() as cursor:
+        cursor.execute("SELECT 1 FROM pg_extension WHERE extname='timescaledb'")
+        if cursor.fetchone() is None:
+            return  # TimescaleDB 未安装，静默跳过
         cursor.execute(SQL)
 
 class Migration(migrations.Migration):

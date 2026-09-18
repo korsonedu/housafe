@@ -29,6 +29,7 @@ from ai.shared.redis_client import FrameConsumer
 from ai.fallback.rules import FallbackEngine
 from ai.latent_space.graph import SpatialGraph
 from ai.baseline.gmm_baseline import PersonalBaseline
+from ai.baseline.latent_baseline import LatentBaseline
 from ai.decoders.anomaly import AnomalyDecoder
 from ai.decoders.notification import NotificationDecider
 from ai.decoders.report import ReportDecoder
@@ -37,6 +38,7 @@ from ai.decoders.tracking import TrackingDecoder
 # Phase B: 训练好的世界模型组件
 ENCODER_PATH = os.path.join(os.path.dirname(__file__), "checkpoints", "encoder_best.pt")
 PREDICTOR_PATH = os.path.join(os.path.dirname(__file__), "checkpoints", "predictor_best.pt")
+LATENT_BASELINE_PATH = os.path.join(os.path.dirname(__file__), "checkpoints", "latent_baseline.pkl")
 
 try:
     import torch
@@ -155,6 +157,7 @@ class WorldModelWorker:
         self.fallback = FallbackEngine()
         self.graph = SpatialGraph()
         self.baseline = PersonalBaseline()
+        self.latent_baseline: LatentBaseline | None = None
         self.anomaly = AnomalyDecoder(self.fallback, self.baseline, self.graph)
         self.notifier = NotificationDecider()
         self.reporter = ReportDecoder()
@@ -215,6 +218,15 @@ class WorldModelWorker:
             pred_params = sum(p.numel() for p in self.predictor.parameters())
             print(f"[WorldModel] Models loaded: encoder ({enc_params/1e6:.1f}M) "
                   f"+ predictor ({pred_params/1e6:.1f}M)")
+
+            # LatentBaseline
+            if os.path.exists(LATENT_BASELINE_PATH):
+                self.latent_baseline = LatentBaseline.load(LATENT_BASELINE_PATH)
+                print(f"[WorldModel] LatentBaseline loaded: "
+                      f"{len(self.latent_baseline._gmms)} contexts, "
+                      f"ready={self.latent_baseline.is_ready}")
+            else:
+                print("[WorldModel] LatentBaseline not found, latent scoring disabled")
         except Exception as e:
             print(f"[WorldModel] Model load failed: {e}, running in rules-only mode")
             self._models_available = False
@@ -281,12 +293,17 @@ class WorldModelWorker:
         buf.append(fv)
         history = list(buf)
 
-        # 世界模型推理：预测误差信号
+        # 世界模型推理：latent density score（主信号） + predictor error（辅助）
+        latent_score = 0.0
         predictor_error = 0.0
         if isinstance(frame, PointCloudFrame) and self._models_available:
             S_t = self._encode_frame(frame.points)
             if S_t is not None:
-                # 用历史隐状态预测当前帧
+                # 隐状态密度估计 — 世界模型核心信号
+                if self.latent_baseline is not None and self.latent_baseline.is_ready:
+                    latent_score = self.latent_baseline.score(S_t.numpy(), fv.ts)
+
+                # Predictor error — 辅助信号
                 if len(self._state_buffer) >= 2:
                     hist = torch.stack(list(self._state_buffer)).unsqueeze(0)  # (1, T, 256)
                     with torch.no_grad():
@@ -298,7 +315,9 @@ class WorldModelWorker:
                 self._state_buffer.append(S_t)
 
         # 运行异常检测
-        anomaly = self.anomaly.evaluate(fv, history, predictor_error=predictor_error)
+        anomaly = self.anomaly.evaluate(fv, history,
+                                        predictor_error=predictor_error,
+                                        latent_score=latent_score)
         if anomaly is None:
             return
 
@@ -314,6 +333,8 @@ class WorldModelWorker:
         parts = [f"[WorldModel] {ts_str} {fv.room} {fv.posture}",
                  f"→ {anomaly.anomaly_type}/{anomaly.severity}",
                  f"(score={anomaly.anomaly_score:.2f}"]
+        if latent_score > 0:
+            parts[-1] += f", latent={latent_score:.2f}"
         if predictor_error > 0:
             parts[-1] += f", pred_err={predictor_error:.3f}"
         parts[-1] += ")"

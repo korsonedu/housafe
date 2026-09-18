@@ -1,58 +1,29 @@
-# Task 2: 事件契约包 (contracts) - Report
+# Task 2 Report: Redis Stream 消费封装
 
-## What was implemented
+## Summary
 
-Created the `contracts/` package as the single source of truth for Tier-1 perception event models:
+Created `ai/shared/redis_client.py` with:
+- **`parse_pointcloud_message(data)`** — parses raw Redis Stream bytes dict into `PointCloudFrame` (includes JSON points array → `np.ndarray (N,5) float32`)
+- **`parse_vital_message(data)`** — parses raw Redis Stream bytes dict into `VitalFrame` (handles empty string → `None` for `resp_rate`/`heart_rate`, `quality` defaults to `0.0`)
+- **`FrameConsumer`** — blocking `consume_one()` reader that watches both `housafe:pointcloud:ingest` and `housafe:vital:ingest` streams via `XREAD`, returns `(stream_name, parsed_frame, msg_id)`
 
-- `contracts/pyproject.toml` -- package definition for `housafe-contracts` v0.1.0
-- `contracts/housafe_contracts/__init__.py` -- empty init
-- `contracts/housafe_contracts/events.py` -- event models and dispatcher
-  - `POSTURES = ("stand","sit","lie","walk","fall")`
-  - `EVENT_KINDS = ("presence","posture","vital","occupancy","heartbeat")`
-  - `_Base` -- shared fields: ts, radar_id, room, seq
-  - `PresenceEvent`, `PostureEvent`, `VitalEvent`, `OccupancyEvent` (all extend `_Base`)
-  - `Heartbeat` (extends `BaseModel` directly -- no room/seq)
-  - `parse_event(kind, payload)` dispatches by kind string
-- `contracts/tests/test_events.py` -- 4 tests
-- `backend/pyproject.toml` -- added `"housafe-contracts"` to dependencies
-
-## TDD Evidence
-
-### RED phase
-
-Command: `cd contracts && pytest -q`
-
-```
-ERROR tests/test_events.py
-ModuleNotFoundError: No module named 'housafe_contracts.events'
-1 error in 0.26s
-```
-
-### GREEN phase
-
-Command: `cd contracts && pytest -q`
-
-```
-....
-4 passed in 0.09s
-```
+Created `ai/tests/test_redis_client.py` with 3 tests (no Redis required):
+- `test_parse_pointcloud_message` — verifies field extraction, ndarray shape/dtype, point values
+- `test_parse_vital_message` — verifies float parsing from bytes
+- `test_parse_vital_message_none_values` — verifies empty bytes → `None` handling
 
 ## Files changed
 
-- `contracts/pyproject.toml` (created)
-- `contracts/housafe_contracts/__init__.py` (created)
-- `contracts/housafe_contracts/events.py` (created)
-- `contracts/tests/__init__.py` (created)
-- `contracts/tests/test_events.py` (created)
-- `backend/pyproject.toml` (modified)
+- `ai/shared/redis_client.py` (created, 178 lines)
+- `ai/tests/test_redis_client.py` (created, 80 lines)
+- `.superpowers/sdd/task-2-report.md` (updated)
 
-## Self-review findings
+Test Results
+```
+$ python -m pytest ai/tests/test_redis_client.py -v
+→ 3 passed
+$ python -m pytest ai/tests/ -v
+→ 10 passed (no regressions)
+```
 
-- `Literal["stand","sit","lie","walk","fall"]` used explicitly (not `Literal[POSTURES]`) as recommended in the brief to avoid Python type-checker issues; `POSTURES` retained as runtime constant
-- `Heartbeat` correctly does NOT extend `_Base` -- has no `room` or `seq` fields, only `ts`, `radar_id`, `status`, `fw_version`
-- `parse_event` raises `ValueError` for unknown kinds (matches test expectation), while Pydantic `ValidationError` surfaces naturally via model construction
-- All 4 tests pass with standard Python 3.12 + pydantic 2.x
-
-## Concerns
-
-None. The contract package is minimal, well-typed, and ready to be imported by backend/simulator/AI modules.
+Concerns: None.

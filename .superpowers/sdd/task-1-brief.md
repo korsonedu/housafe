@@ -1,127 +1,301 @@
-### Task 1: 项目脚手架与本地基础设施
+### Task 1: Shared types — 模块间通信的数据契约
 
 **Files:**
-- Create: `.gitignore`
-- Create: `docker-compose.yml`
-- Create: `backend/pyproject.toml`
-- Create: `backend/housafe/__init__.py`, `backend/housafe/settings.py`, `backend/housafe/urls.py`, `backend/housafe/asgi.py`, `backend/manage.py`
-- Create: `backend/.env.example`
-- Create: `README.md`
+- Create: `ai/shared/__init__.py`
+- Create: `ai/shared/types.py`
+- Create: `ai/__init__.py`
 
 **Interfaces:**
-- Produces: 可运行的 Django ASGI 项目 `housafe`；Postgres(Timescale)/Redis 本地服务；settings 读取 `DATABASE_URL`、`REDIS_URL`。
+- Produces: `FeatureVector`, `AnomalyResult`, `NotificationDecision`, `PointCloudFrame`, `VitalFrame`, `GraphNode`, `SpatialEdge` — 所有后续 Task 依赖这些类型
 
-- [ ] **Step 1: 初始化 git 与忽略文件**
-
-```bash
-cd /Users/eular/Desktop/housafe
-git init
-```
-
-`.gitignore`:
-```
-__pycache__/
-*.pyc
-.env
-.venv/
-node_modules/
-.expo/
-*.sqlite3
-.DS_Store
-```
-
-- [ ] **Step 2: docker-compose 起 Timescale + Redis**
-
-`docker-compose.yml`:
-```yaml
-services:
-  db:
-    image: timescale/timescaledb:2.15.0-pg16
-    environment:
-      POSTGRES_DB: housafe
-      POSTGRES_USER: housafe
-      POSTGRES_PASSWORD: housafe
-    ports: ["5432:5432"]
-    volumes: ["dbdata:/var/lib/postgresql/data"]
-  redis:
-    image: redis:7-alpine
-    ports: ["6379:6379"]
-volumes:
-  dbdata:
-```
-
-Run: `docker-compose up -d` → Expected: `db` 与 `redis` 容器 healthy。
-
-> Note: 本机只有 `docker-compose`（带连字符），没有 `docker compose` 插件。请使用 `docker-compose up -d`。
-
-- [ ] **Step 3: 建 Python 环境与依赖**
-
-`backend/pyproject.toml`:
-```toml
-[project]
-name = "housafe-backend"
-version = "0.1.0"
-requires-python = ">=3.12"
-dependencies = [
-  "django>=5.0",
-  "djangorestframework>=3.15",
-  "djangorestframework-simplejwt>=5.3",
-  "channels>=4.0",
-  "channels-redis>=4.2",
-  "daphne>=4.1",
-  "psycopg[binary]>=3.1",
-  "pydantic>=2.6",
-  "dj-database-url>=2.1",
-  "python-dotenv>=1.0",
-]
-
-[project.optional-dependencies]
-dev = ["pytest>=8", "pytest-django>=4.8", "pytest-asyncio>=0.23"]
-```
+- [ ] **Step 1: Create `ai/__init__.py` (empty package marker)**
 
 ```bash
-cd backend && python3.12 -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
+mkdir -p ai/shared
+touch ai/__init__.py
+touch ai/shared/__init__.py
 ```
 
-- [ ] **Step 4: 生成 Django 项目骨架**
+- [ ] **Step 2: Write types with tests**
+
+First create the test:
 
 ```bash
-cd backend && django-admin startproject housafe . --name asgi.py
+mkdir -p ai/tests
+touch ai/tests/__init__.py
 ```
 
-编辑 `housafe/settings.py` 关键项：
+Write `ai/tests/test_types.py`:
+
 ```python
-import os, dj_database_url
-from dotenv import load_dotenv
-load_dotenv()
+"""验证 FeatureVector 构造、时间编码计算、AnomalyResult 字段约束"""
+import math
+import pytest
+from ai.shared.types import (
+    FeatureVector, AnomalyResult, NotificationDecision,
+    time_encode, posture_to_onehot,
+)
 
-INSTALLED_APPS += ["rest_framework", "channels"]
-ASGI_APPLICATION = "housafe.asgi.application"
-DATABASES = {"default": dj_database_url.parse(
-    os.environ.get("DATABASE_URL", "postgres://housafe:housafe@localhost:5432/housafe"))}
-CHANNEL_LAYERS = {"default": {
-    "BACKEND": "channels_redis.core.RedisChannelLayer",
-    "CONFIG": {"hosts": [os.environ.get("REDIS_URL", "redis://localhost:6379/0")]}}}
+def test_time_encode_noon():
+    """正午 12:00 → sin≈0, cos≈-1 (或 1 取决于角度定义)"""
+    s, c = time_encode(12.0)
+    # 12:00 = π in sin/cos cycle (0=midnight, 12h=π)
+    assert abs(s) < 1e-9
+    assert c == pytest.approx(-1.0, abs=1e-9)
+
+def test_time_encode_midnight():
+    s, c = time_encode(0.0)
+    assert abs(s) < 1e-9
+    assert c == pytest.approx(1.0, abs=1e-9)
+
+def test_time_encode_symmetry():
+    """6:00 和 18:00 的 cos 应该相同（循环对称）"""
+    s6, c6 = time_encode(6.0)
+    s18, c18 = time_encode(18.0)
+    assert c6 == pytest.approx(c18, abs=1e-9)
+    assert s6 == pytest.approx(-s18, abs=1e-9)
+
+def test_posture_onehot():
+    assert posture_to_onehot("stand") == [1, 0, 0, 0, 0]
+    assert posture_to_onehot("lie")   == [0, 0, 1, 0, 0]
+    assert posture_to_onehot("fall")  == [0, 0, 0, 0, 1]
+    # unknown → all zeros
+    assert posture_to_onehot("unknown") == [0, 0, 0, 0, 0]
+
+def test_feature_vector_to_array():
+    fv = FeatureVector(
+        ts=1000, device_id="r1", room="bedroom",
+        posture="lie", posture_confidence=0.9, presence=True, moving=False,
+        centroid=(1.0, 2.0, 0.3), height=0.2, n_points=12, occupancy_estimate=1,
+        resp_rate=16.0, heart_rate=72.0, vital_quality=0.85,
+        hour_sin=0.0, hour_cos=1.0, weekday=0,
+        velocity_variance=0.01,
+    )
+    arr = fv.to_array()
+    # 5 (posture onehot) + 3 (confidence/moving/presence) + 3 (centroid)
+    # + 1 (height) + 1 (n_points) + 1 (occupancy)
+    # + 3 (vitals) + 2 (time) + 7 (weekday) + 1 (vel_var) = 27
+    assert arr.shape == (27,)
+    assert arr.dtype == np.float64
+    # posture onehot: lie = [0,0,1,0,0]
+    assert arr[2] == 1.0
+
+def test_anomaly_result_fields():
+    ar = AnomalyResult(
+        ts=1000, device_id="r1", room="bathroom",
+        anomaly_score=0.85, anomaly_type="fall",
+        severity="critical", source="fallback",
+        details={"height_drop_m": 1.2},
+    )
+    assert 0 <= ar.anomaly_score <= 1
+
+def test_notification_decision():
+    nd = NotificationDecision(
+        level="sms", reason="fall detected in bathroom",
+        anomaly=AnomalyResult(
+            ts=1000, device_id="r1", room="bathroom",
+            anomaly_score=0.95, anomaly_type="fall",
+            severity="critical", source="fallback", details={},
+        ),
+    )
+    assert nd.level in ("none", "push", "sms", "call")
 ```
 
-`.env.example`:
-```
-DATABASE_URL=postgres://housafe:housafe@localhost:5432/housafe
-REDIS_URL=redis://localhost:6379/0
-```
-
-- [ ] **Step 5: 验证启动并提交**
-
-Run: `python manage.py migrate && python manage.py runserver`
-Expected: 无报错，`http://127.0.0.1:8000/` 返回 Django 欢迎页。
+- [ ] **Step 3: Verify test fails (types module doesn't exist yet)**
 
 ```bash
-git add -A && git commit -m "chore: scaffold monorepo, django asgi project, docker infra"
+cd /Users/eular/Desktop/housafe && python -m pytest ai/tests/test_types.py -v 2>&1 | head -20
+```
+Expected: ModuleNotFoundError
+
+- [ ] **Step 4: Implement `ai/shared/types.py`**
+
+```python
+"""世界模型共享类型 — 所有模块通过 dataclass 接口通信"""
+from dataclasses import dataclass, field
+import math
+import numpy as np
+
+POSTURES = ("stand", "sit", "lie", "walk", "fall")
+ALERT_TYPES = ("fall", "stillness", "vital_anomaly", "pattern_deviation", "offline")
+SEVERITY_LEVELS = ("info", "warning", "critical")
+NOTIFICATION_LEVELS = ("none", "push", "sms", "call")
+
+
+def time_encode(hour: float) -> tuple[float, float]:
+    """将 0-24 的小时数编码为循环 sin/cos 对"""
+    rad = hour / 24.0 * 2 * math.pi
+    return math.sin(rad), math.cos(rad)
+
+
+def posture_to_onehot(posture: str) -> list[int]:
+    """姿态 → 5 维 one-hot"""
+    if posture not in POSTURES:
+        return [0, 0, 0, 0, 0]
+    idx = POSTURES.index(posture)
+    return [1 if i == idx else 0 for i in range(5)]
+
+
+@dataclass
+class FeatureVector:
+    """单帧特征向量 — 临时替代 Encoder 输出的 S_t"""
+    ts: int
+    device_id: str
+    room: str
+    # 从点云提取
+    posture: str
+    posture_confidence: float
+    presence: bool
+    moving: bool
+    centroid: tuple[float, float, float]
+    height: float
+    n_points: int
+    occupancy_estimate: int
+    # 从生命体征
+    resp_rate: float | None
+    heart_rate: float | None
+    vital_quality: float | None
+    # 时间编码
+    hour_sin: float
+    hour_cos: float
+    weekday: int  # 0=Monday ... 6=Sunday
+    # 衍生
+    velocity_variance: float = 0.0
+
+    def to_array(self) -> np.ndarray:
+        """转为固定维度 numpy array，供 GMM baseline 使用"""
+        posture_oh = posture_to_onehot(self.posture)
+        weekday_oh = [1 if i == self.weekday else 0 for i in range(7)]
+        arr = np.array([
+            *posture_oh,
+            float(self.posture_confidence),
+            float(self.moving),
+            float(self.presence),
+            *self.centroid,
+            self.height,
+            float(self.n_points),
+            float(self.occupancy_estimate),
+            self.resp_rate if self.resp_rate is not None else -1.0,
+            self.heart_rate if self.heart_rate is not None else -1.0,
+            self.vital_quality if self.vital_quality is not None else -1.0,
+            self.hour_sin,
+            self.hour_cos,
+            *weekday_oh,
+            self.velocity_variance,
+        ], dtype=np.float64)
+        return arr
+
+
+@dataclass
+class AnomalyResult:
+    """异常检测结果"""
+    ts: int
+    device_id: str
+    room: str
+    anomaly_score: float  # 0-1, 0=正常 1=极端异常
+    anomaly_type: str     # fall / stillness / vital_anomaly / pattern_deviation / offline
+    severity: str         # info / warning / critical
+    source: str           # "fallback" / "baseline" / "both"
+    details: dict = field(default_factory=dict)
+
+    def __post_init__(self):
+        if not 0 <= self.anomaly_score <= 1:
+            raise ValueError(f"anomaly_score must be in [0,1], got {self.anomaly_score}")
+        if self.anomaly_type not in ALERT_TYPES:
+            raise ValueError(f"unknown anomaly_type: {self.anomaly_type}")
+        if self.severity not in SEVERITY_LEVELS:
+            raise ValueError(f"unknown severity: {self.severity}")
+
+
+@dataclass
+class NotificationDecision:
+    """通知决策"""
+    level: str   # none / push / sms / call
+    reason: str
+    anomaly: AnomalyResult
+
+    def __post_init__(self):
+        if self.level not in NOTIFICATION_LEVELS:
+            raise ValueError(f"unknown notification level: {self.level}")
+
+
+@dataclass
+class GraphNode:
+    """空间图节点"""
+    node_id: int
+    centroid: tuple[float, float, float]  # 区域中心 (x, y, z)
+    avg_height: float            # 该区域平均点云高度
+    stay_ratio: float            # 在所有帧中的停留比例
+    hourly_prob: list[float]     # 24 个时段的停留概率分布
+    risk_score: float            # 危险等级 0-1
+    attribute_vector: np.ndarray | None = None  # 组合属性向量
+
+    def __post_init__(self):
+        if self.attribute_vector is None:
+            self.attribute_vector = np.array([
+                self.avg_height, self.stay_ratio,
+                *self.hourly_prob, self.risk_score,
+            ], dtype=np.float32)
+
+
+@dataclass
+class SpatialEdge:
+    """空间图边"""
+    from_node: int
+    to_node: int
+    transition_freq: float   # 转移概率
+    avg_transition_s: float  # 平均过渡时间（秒）
+
+
+@dataclass
+class PointCloudFrame:
+    """从 Redis Stream 解析的点云帧"""
+    ts: int
+    device_id: str
+    family_id: str
+    room: str
+    frame_id: str
+    points: np.ndarray  # (N, 5) float32 [x,y,z,velocity,intensity]
+
+
+@dataclass
+class VitalFrame:
+    """从 Redis Stream 解析的生命体征帧"""
+    ts: int
+    device_id: str
+    family_id: str
+    room: str
+    resp_rate: float | None
+    heart_rate: float | None
+    quality: float
 ```
 
-## Global Constraints (relevant to all tasks)
+- [ ] **Step 5: Run tests**
 
-- Python ≥ 3.12；Django ≥ 5.0；Pydantic ≥ 2.6；Channels ≥ 4.0。
-- 每个任务结束必须 commit；提交信息用 `feat:` / `test:` / `chore:` 前缀。
-- 测试框架：后端用 `pytest` + `pytest-django` + `pytest-asyncio`；契约用 `pytest`。
+```bash
+cd /Users/eular/Desktop/housafe && python -m pytest ai/tests/test_types.py -v
+```
+Expected: 6 passed
+
+- [ ] **Step 6: Install numpy for the ai worker (add to backend pyproject.toml or use separate deps)**
+
+Check if numpy is available:
+```bash
+cd /Users/eular/Desktop/housafe && python -c "import numpy; print(numpy.__version__)"
+```
+
+If not, add to `backend/pyproject.toml` dependencies: `"numpy>=1.26,<2"`
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add ai/__init__.py ai/shared/__init__.py ai/shared/types.py ai/tests/__init__.py ai/tests/test_types.py
+git commit -m "feat(ai): add shared types for world model components
+
+FeatureVector, AnomalyResult, NotificationDecision, time_encode, posture_to_onehot — data contracts for Phase A modules.
+
+Co-Authored-By: Claude <noreply@anthropic.com>"
+```
+
+---
+

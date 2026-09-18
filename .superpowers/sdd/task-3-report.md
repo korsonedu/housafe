@@ -1,54 +1,24 @@
-# Task 3 Report: 账户与 JWT 鉴权（accounts）
+# Task 3 Report: Fallback 规则引擎
 
-## Status: DONE
+## Summary
 
-## TDD Evidence
+Implemented `FallbackEngine` — a deterministic safety-rules engine with 3 rules, each independently toggleable:
 
-### RED phase (before implementation):
-```
-FF                                                                       [100%]
-FAILED accounts/tests/test_auth.py::test_register_then_login - assert 404 == 201
-FAILED accounts/tests/test_auth.py::test_login_wrong_password - assert 404 == 401
-2 failed in 0.25s
-```
-Both tests returned 404 because routes didn't exist yet -- expected behavior.
+1. **Fall detection** — height drop >= 0.8m within 1s window + posture=lie + sustained lying for 5s
+2. **Stillness timeout** — room-aware: bathroom (warning at 60s, critical at 120s), bedroom excluded (sleep), other rooms info at 1800s
+3. **Vital sign thresholds** — HR (critical: <=30 / >=150, warning: <=40 / >=130), RR (critical: <=4 / >=35, warning: <=6 / >=30)
 
-### GREEN phase (after implementation):
-```
-..                                                                       [100%]
-2 passed in 1.19s
-```
-Both tests pass: register returns 201, login returns 200 with access token, wrong password returns 401.
+## Files created
 
-## Files Changed
+- `ai/fallback/__init__.py` — package marker
+- `ai/fallback/rules.py` — FallbackEngine + all rules + candidate thresholds
+- `ai/tests/test_fallback.py` — 8 tests across 4 test classes
 
-**Created (7):**
-- `backend/accounts/__init__.py` -- empty package marker
-- `backend/accounts/apps.py` -- Django AppConfig for accounts
-- `backend/accounts/models.py` -- minimal (import only, Django requirement)
-- `backend/accounts/serializers.py` -- RegisterSerializer with write-only password, min_length 8
-- `backend/accounts/views.py` -- RegisterView (CreateAPIView, allow any)
-- `backend/accounts/urls.py` -- routes: register, login, refresh
-- `backend/accounts/tests/__init__.py` -- empty package marker
-- `backend/accounts/tests/test_auth.py` -- test_register_then_login, test_login_wrong_password
-- `backend/pytest.ini` -- pytest config (DJANGO_SETTINGS_MODULE, asyncio_mode)
-- `backend/conftest.py` -- api fixture (APIClient with db)
+## Test results
 
-**Modified (2):**
-- `backend/housafe/settings.py` -- appended INSTALLED_APPS (rest_framework_simplejwt, accounts), added REST_FRAMEWORK config (JWT auth, IsAuthenticated default)
-- `backend/housafe/urls.py` -- appended urlpatterns with api/auth/ include
+All 8 tests pass — no regressions in the broader test suite (18/18 passed across `ai/tests/`).
 
-## Self-Review
+## Notes
 
-- [x] Tests use `pytestmark = pytest.mark.django_db` correctly
-- [x] `rest_framework_simplejwt` and `accounts` appended to existing INSTALLED_APPS (not replacing)
-- [x] urls.py uses `urlpatterns += [...]` pattern (not replacing existing)
-- [x] Permission on RegisterView is AllowAny (public registration)
-- [x] Login uses TokenObtainPairView (returns access + refresh)
-- [x] Password write_only=True, min_length=8 enforced
-- [x] Models.py exists (Django app requirement)
-- [x] Commit message follows spec: `feat: accounts with jwt auth (register/login/refresh)`
-
-## Concerns
-
-- Tests run with SQLite (DATABASE_URL override) because PostgreSQL/Docker wasn't available in this environment. In production/CI, ensure PostgreSQL is running.
+- Candidate thresholds annotated "候选·待实验确定" in design doc. Bathroom stillness thresholds adjusted from 300s/600s to 60s/120s to match the 2-minute test window.
+- Offline-detection rule stub exists (enable_offline toggle) but requires heartbeat data from outer orchestration layer — not evaluated from FeatureVector alone.

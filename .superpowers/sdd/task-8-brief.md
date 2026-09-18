@@ -1,115 +1,188 @@
-### Task 8: 实时推送 WS（realtime）
+### Task 8: 通知 Decoder
 
 **Files:**
-- Create: `backend/realtime/__init__.py`, `apps.py`, `consumers.py`, `routing.py`
-- Modify: `backend/housafe/asgi.py`（加 realtime 路由），settings（加 `realtime`）
-- Test: `backend/realtime/tests/test_realtime.py`
+- Create: `ai/decoders/notification.py`
+- Create: `ai/tests/test_notification.py`
 
 **Interfaces:**
-- Consumes: ingest 的 `group_send("family_<id>", {type:"event.push",...})`；JWT
-- Produces: WS 端点 `ws/app?token=<jwt>&family=<id>`：JWT 鉴权 + 校验用户属该家庭 → 加入 `family_<id>` 组 → 收到 `event.push` 转发给 App
+- Consumes: `AnomalyResult` from Task 1, `NotificationDecision` from Task 1
+- Produces: `NotificationDecider` class — `decide(anomaly, history) -> NotificationDecision`
 
-- [ ] **Step 1: 写失败测试（端到端：ingest 灌 → app 端收到）**
+- [ ] **Step 1: Write tests**
 
-`backend/realtime/tests/test_realtime.py`:
+`ai/tests/test_notification.py`:
+
 ```python
-import pytest
-from channels.testing import WebsocketCommunicator
-from housafe.asgi import application
-pytestmark = pytest.mark.django_db(transaction=True)
+"""测试通知决策规则"""
+from ai.shared.types import AnomalyResult, NotificationDecision
+from ai.decoders.notification import NotificationDecider
 
-@pytest.mark.asyncio
-async def test_ingest_to_app_flow(db):
-    from django.contrib.auth.models import User
-    from families.models import Family
-    from devices.models import RadarDevice
-    from rest_framework_simplejwt.tokens import AccessToken
-    u = await User.objects.acreate_user("k","","pw12345678")
-    fam = await Family.objects.acreate(name="f", owner=u)
-    await RadarDevice.objects.acreate(device_id="d1", secret="s1", family=fam, room="bed")
-    token = str(AccessToken.for_user(u))
+class TestNotificationDecider:
+    def test_fall_critical_calls(self):
+        d = NotificationDecider()
+        ar = AnomalyResult(
+            ts=1000, device_id="r1", room="bathroom",
+            anomaly_score=0.95, anomaly_type="fall",
+            severity="critical", source="fallback",
+            details={},
+        )
+        decision = d.decide(ar, [])
+        assert decision.level == "call"
 
-    app = WebsocketCommunicator(application, f"/ws/app?token={token}&family={fam.id}")
-    assert (await app.connect())[0]
-    ing = WebsocketCommunicator(application, "/ws/ingest")
-    await ing.connect()
-    await ing.send_json_to({"device_id":"d1","secret":"s1"}); await ing.receive_json_from()
-    await ing.send_json_to({"kind":"posture","payload":{"ts":1,"radar_id":"d1","room":"bed","seq":1,"posture":"walk","confidence":0.9}})
-    pushed = await app.receive_json_from()
-    assert pushed["kind"] == "posture" and pushed["payload"]["room"] == "bed"
-    await app.disconnect(); await ing.disconnect()
+    def test_fall_warning_sms(self):
+        d = NotificationDecider()
+        ar = AnomalyResult(
+            ts=1000, device_id="r1", room="bedroom",
+            anomaly_score=0.75, anomaly_type="fall",
+            severity="warning", source="fallback",
+            details={},
+        )
+        decision = d.decide(ar, [])
+        assert decision.level == "sms"
+
+    def test_stillness_critical_sms(self):
+        d = NotificationDecider()
+        ar = AnomalyResult(
+            ts=1000, device_id="r1", room="bathroom",
+            anomaly_score=0.9, anomaly_type="stillness",
+            severity="critical", source="fallback",
+            details={"duration_s": 600},
+        )
+        decision = d.decide(ar, [])
+        assert decision.level == "sms"
+
+    def test_vital_warning_push(self):
+        d = NotificationDecider()
+        ar = AnomalyResult(
+            ts=1000, device_id="r1", room="bedroom",
+            anomaly_score=0.6, anomaly_type="vital_anomaly",
+            severity="warning", source="fallback",
+            details={"heart_rate": 135},
+        )
+        decision = d.decide(ar, [])
+        assert decision.level == "push"
+
+    def test_pattern_deviation_info_push(self):
+        d = NotificationDecider()
+        ar = AnomalyResult(
+            ts=1000, device_id="r1", room="bedroom",
+            anomaly_score=0.5, anomaly_type="pattern_deviation",
+            severity="info", source="baseline",
+            details={},
+        )
+        decision = d.decide(ar, [])
+        assert decision.level in ("push", "none")
+
+    def test_suppress_duplicates(self):
+        """短时间内相同异常类型 → 抑制重复通知"""
+        d = NotificationDecider(suppress_window_s=300)
+        ar = AnomalyResult(
+            ts=1000, device_id="r1", room="bathroom",
+            anomaly_score=0.7, anomaly_type="stillness",
+            severity="warning", source="fallback",
+            details={},
+        )
+        # 第一条正常通知
+        d1 = d.decide(ar, [])
+        # 模拟 history: 刚发过同类通知
+        d2 = d.decide(ar, [d1])
+        assert d2.level == "none"
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [ ] **Step 2: Run test (verify failure)** then implement
 
-Run: `cd backend && pytest realtime -q`
-Expected: FAIL。
+- [ ] **Step 3: Implement `ai/decoders/notification.py`**
 
-- [ ] **Step 3: 实现 realtime consumer + routing**
-
-`backend/realtime/consumers.py`:
 ```python
-from urllib.parse import parse_qs
-from channels.generic.websocket import AsyncJsonWebsocketConsumer
-from channels.db import database_sync_to_async
+"""通知 Decoder — 异常 → 通知等级（不提/推送/短信/电话）"""
+from ai.shared.types import AnomalyResult, NotificationDecision
 
-class AppConsumer(AsyncJsonWebsocketConsumer):
-    async def connect(self):
-        qs = parse_qs(self.scope["query_string"].decode())
-        token = qs.get("token",[None])[0]; family_id = qs.get("family",[None])[0]
-        user = await self._auth(token)
-        if user is None or not await self._owns(user, family_id):
-            await self.close(code=4401); return
-        self.group = f"family_{family_id}"
-        await self.channel_layer.group_add(self.group, self.channel_name)
-        await self.accept()
 
-    @database_sync_to_async
-    def _auth(self, token):
-        if not token: return None
-        try:
-            from rest_framework_simplejwt.tokens import AccessToken
-            from django.contrib.auth.models import User
-            return User.objects.get(id=AccessToken(token)["user_id"])
-        except Exception:
-            return None
-    @database_sync_to_async
-    def _owns(self, user, family_id):
-        from families.models import Family
-        return Family.objects.filter(id=family_id, owner=user).exists()
+class NotificationDecider:
+    """MVP 版本：规则决策表。演进版本：MLP 4-class 从用户反馈学习。"""
 
-    async def event_push(self, event):
-        await self.send_json({"kind":event["kind"],"payload":event["payload"]})
+    # 通知决策矩阵: (anomaly_type, severity) → level
+    DECISION_MATRIX = {
+        ("fall", "critical"): "call",
+        ("fall", "warning"): "sms",
+        ("fall", "info"): "push",
+        ("stillness", "critical"): "sms",
+        ("stillness", "warning"): "push",
+        ("stillness", "info"): "push",
+        ("vital_anomaly", "critical"): "sms",
+        ("vital_anomaly", "warning"): "push",
+        ("vital_anomaly", "info"): "push",
+        ("pattern_deviation", "critical"): "sms",
+        ("pattern_deviation", "warning"): "push",
+        ("pattern_deviation", "info"): "none",
+        ("offline", "critical"): "call",
+        ("offline", "warning"): "push",
+        ("offline", "info"): "push",
+    }
 
-    async def disconnect(self, code):
-        if hasattr(self,"group"):
-            await self.channel_layer.group_discard(self.group, self.channel_name)
+    def __init__(self, suppress_window_s: float = 300.0):
+        """
+        Args:
+            suppress_window_s: 同类型通知抑制窗口（秒）。窗口内重复通知降级为 none。
+        """
+        self.suppress_window_s = suppress_window_s
+
+    def decide(
+        self, anomaly: AnomalyResult, recent_decisions: list[NotificationDecision]
+    ) -> NotificationDecision:
+        """
+        决策通知等级。
+        Args:
+            anomaly: 当前异常
+            recent_decisions: 最近的决策历史（用于抑制重复）
+        """
+        level = self.DECISION_MATRIX.get(
+            (anomaly.anomaly_type, anomaly.severity), "push"
+        )
+
+        # 抑制窗口：同类型同房间的重复通知
+        if level != "none" and self._is_duplicate(anomaly, recent_decisions):
+            level = "none"
+
+        return NotificationDecision(
+            level=level,
+            reason=f"{anomaly.anomaly_type} in {anomaly.room} (score={anomaly.anomaly_score:.2f})",
+            anomaly=anomaly,
+        )
+
+    def _is_duplicate(
+        self, anomaly: AnomalyResult, recent: list[NotificationDecision]
+    ) -> bool:
+        for d in recent:
+            if d.level == "none":
+                continue
+            a = d.anomaly
+            if (a.anomaly_type == anomaly.anomaly_type
+                and a.room == anomaly.room
+                and a.device_id == anomaly.device_id):
+                dt_s = (anomaly.ts - a.ts) / 1000.0
+                if 0 <= dt_s <= self.suppress_window_s:
+                    return True
+        return False
 ```
-`backend/realtime/routing.py`:
-```python
-from django.urls import path
-from .consumers import AppConsumer
-websocket_urlpatterns = [path("ws/app", AppConsumer.as_asgi())]
-```
-修改 `housafe/asgi.py` — 把 URLRouter 改成同时包含 ingest 和 realtime 路由：
-```python
-application = ProtocolTypeRouter({
-    "http": django_asgi,
-    "websocket": URLRouter(ingest.routing.websocket_urlpatterns + realtime.routing.websocket_urlpatterns),
-})
-```
-settings 加 `"realtime"`；`apps.py` 用标准配置（name="realtime"）。
 
-- [ ] **Step 4: 运行确认通过并提交**
+- [ ] **Step 4: Run tests**
 
-Run: `cd backend && pytest realtime -q`
-Expected: PASS。
 ```bash
-git add -A && git commit -m "feat: realtime app ws (jwt auth, family scoping, event fanout)"
+cd /Users/eular/Desktop/housafe && python -m pytest ai/tests/test_notification.py -v
+```
+Expected: 6 passed
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add ai/decoders/notification.py ai/tests/test_notification.py
+git commit -m "feat(ai): add NotificationDecider — anomaly → notification level mapping
+
+Rule matrix + duplicate suppression window. MLP upgrade on user feedback (P2).
+
+Co-Authored-By: Claude <noreply@anthropic.com>"
 ```
 
-## Global Constraints (relevant)
+---
 
-- 所有 WS 鉴权失败必须关闭连接并返回明确 close code（4401），不得静默接受。
-- 模块解耦契约：realtime 是编排层，允许组合调用（accounts JWT、families 所有权校验、channel_layer）。
-- realtime 不得 import ingest 内部实现，只通过 channel_layer 的 group 消息通信。

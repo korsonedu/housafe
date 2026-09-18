@@ -1,141 +1,190 @@
-### Task 7: 接入网关 WS（ingest）
+### Task 7: 异常 Decoder
 
 **Files:**
-- Create: `backend/ingest/__init__.py`, `apps.py`, `consumers.py`, `routing.py`
-- Create: `backend/housafe/asgi.py`（改造为 ProtocolTypeRouter）
-- Modify: settings（加 `ingest`）
-- Test: `backend/ingest/tests/test_ingest.py`
+- Create: `ai/decoders/__init__.py`
+- Create: `ai/decoders/anomaly.py`
+- Create: `ai/tests/test_anomaly.py`
 
 **Interfaces:**
-- Consumes: `RadarDevice.verify`（Task 5）、`parse_event`（Task 2）、`store_event`（Task 6）
-- Produces:
-  - WS 端点 `ws/ingest`：首帧 `{device_id, secret}` 鉴权；后续帧 `{kind, payload}`；校验契约→`store_event`→`group_send("family_<id>", {...})` 供 realtime
-  - 鉴权失败 close code 4401；契约非法回 `{error:"invalid"}` 不落库
+- Consumes: `FallbackEngine` from Task 3, `SpatialGraph` from Task 5, `PersonalBaseline` from Task 6, `FeatureVector` from Task 1
+- Produces: `AnomalyDecoder` class — `evaluate(fv, history) -> AnomalyResult | None`
 
-- [ ] **Step 1: 写失败测试（Channels Communicator）**
-
-`backend/ingest/tests/test_ingest.py`:
-```python
-import pytest
-from channels.testing import WebsocketCommunicator
-from housafe.asgi import application
-pytestmark = pytest.mark.django_db(transaction=True)
-
-async def _device(db):
-    from django.contrib.auth.models import User
-    from families.models import Family
-    from devices.models import RadarDevice
-    u = await User.objects.acreate_user("k","","pw12345678")
-    fam = await Family.objects.acreate(name="f", owner=u)
-    return await RadarDevice.objects.acreate(device_id="d1", secret="s1", family=fam, room="bed"), fam
-
-@pytest.mark.asyncio
-async def test_bad_secret_closes(db):
-    await _device(db)
-    c = WebsocketCommunicator(application, "/ws/ingest")
-    await c.connect()
-    await c.send_json_to({"device_id":"d1","secret":"WRONG"})
-    msg = await c.receive_output()
-    assert msg["type"] == "websocket.close"
-
-@pytest.mark.asyncio
-async def test_valid_event_persists(db):
-    dev, _ = await _device(db)
-    c = WebsocketCommunicator(application, "/ws/ingest")
-    await c.connect()
-    await c.send_json_to({"device_id":"d1","secret":"s1"})
-    await c.receive_json_from()  # ack
-    await c.send_json_to({"kind":"posture","payload":{"ts":1700000000000,"radar_id":"d1","room":"bed","seq":1,"posture":"walk","confidence":0.9}})
-    await c.receive_json_from()  # stored ack
-    from events.models import PostureRow
-    assert await PostureRow.objects.filter(device_id="d1").acount() == 1
-    await c.disconnect()
-```
-
-- [ ] **Step 2: 运行确认失败**
-
-Run: `cd backend && pytest ingest -q`
-Expected: FAIL（asgi/consumer 缺失）。
-
-- [ ] **Step 3: 实现 consumer + routing + asgi**
-
-`backend/ingest/consumers.py`:
-```python
-import time
-from channels.generic.websocket import AsyncJsonWebsocketConsumer
-from channels.db import database_sync_to_async
-from pydantic import ValidationError
-from housafe_contracts.events import parse_event
-from devices.models import RadarDevice
-from events.store import store_event
-
-class IngestConsumer(AsyncJsonWebsocketConsumer):
-    async def connect(self):
-        self.device = None
-        await self.accept()
-
-    @database_sync_to_async
-    def _verify(self, did, secret): return RadarDevice.verify(did, secret)
-    @database_sync_to_async
-    def _family_id(self): return self.device.family_id
-    @database_sync_to_async
-    def _store(self, kind, model): store_event(self.device.device_id, kind, model, ts_recv=int(time.time()*1000))
-
-    async def receive_json(self, content):
-        if self.device is None:
-            self.device = await self._verify(content.get("device_id"), content.get("secret"))
-            if self.device is None:
-                await self.close(code=4401); return
-            self.group = f"family_{await self._family_id()}"
-            await self.channel_layer.group_add(self.group, self.channel_name)
-            await self.send_json({"ack":"auth"}); return
-        try:
-            model = parse_event(content["kind"], content["payload"])
-        except (ValidationError, ValueError, KeyError):
-            await self.send_json({"error":"invalid"}); return
-        await self._store(content["kind"], model)
-        await self.channel_layer.group_send(self.group,
-            {"type":"event.push","kind":content["kind"],"payload":content["payload"]})
-        await self.send_json({"ack":"stored","seq":model.seq})
-
-    async def disconnect(self, close_code):
-        if hasattr(self, "group"):
-            await self.channel_layer.group_discard(self.group, self.channel_name)
-```
-`backend/ingest/routing.py`:
-```python
-from django.urls import path
-from .consumers import IngestConsumer
-websocket_urlpatterns = [path("ws/ingest", IngestConsumer.as_asgi())]
-```
-`backend/housafe/asgi.py`:
-```python
-import os
-os.environ.setdefault("DJANGO_SETTINGS_MODULE","housafe.settings")
-from django.core.asgi import get_asgi_application
-django_asgi = get_asgi_application()
-from channels.routing import ProtocolTypeRouter, URLRouter
-import ingest.routing
-application = ProtocolTypeRouter({
-    "http": django_asgi,
-    "websocket": URLRouter(ingest.routing.websocket_urlpatterns),
-})
-```
-> `realtime.routing` 在 Task 8 建。先只引 `ingest.routing`，Task 8 再加 `realtime`。
-
-settings 加 `"ingest"`；`apps.py` 用标准 Django app config（name="ingest"）。
-
-- [ ] **Step 4: 运行确认通过并提交**
-
-Run: `cd backend && pytest ingest -q`
-Expected: PASS（2 passed）。
+- [ ] **Step 1: Create directory**
 
 ```bash
-git add -A && git commit -m "feat: ingest ws gateway (device auth, contract validate, persist, fanout)"
+mkdir -p ai/decoders
+touch ai/decoders/__init__.py
 ```
 
-## Global Constraints (relevant)
+- [ ] **Step 2: Write tests**
 
-- 所有 WS 鉴权失败必须关闭连接并返回明确 close code，不得静默接受。
-- 模块解耦契约：ingest 是编排层，允许组合调用下游接口（contracts、devices、events、channel_layer）。
-- `ts_recv` 使用 `int(time.time()*1000)` 记录服务器接收时间，不覆盖事件的 `ts` 字段。
+`ai/tests/test_anomaly.py`:
+
+```python
+"""测试异常解码器：融合 fallback + baseline + 空间感知"""
+from ai.shared.types import FeatureVector
+from ai.decoders.anomaly import AnomalyDecoder
+from ai.fallback.rules import FallbackEngine
+
+def make_fv(ts=1000, posture="sit", room="bedroom", heart_rate=72, resp_rate=16,
+            centroid=(1.0, 1.0, 0.5), height=0.8, moving=False, vel_var=0.01,
+            hour=12.0, weekday=0):
+    from ai.shared.types import time_encode
+    h_sin, h_cos = time_encode(hour)
+    return FeatureVector(
+        ts=ts, device_id="r1", room=room, posture=posture,
+        posture_confidence=0.9, presence=True, moving=moving,
+        centroid=centroid, height=height, n_points=15,
+        occupancy_estimate=1, resp_rate=resp_rate, heart_rate=heart_rate,
+        vital_quality=0.85, hour_sin=h_sin, hour_cos=h_cos,
+        weekday=weekday, velocity_variance=vel_var,
+    )
+
+class TestAnomalyDecoder:
+    def test_fallback_detected_passes_through(self):
+        """Fallback 检出的异常直接透传"""
+        decoder = AnomalyDecoder(fallback=FallbackEngine())
+        # 构造跌倒序列
+        history = [
+            make_fv(ts=1000 + i*200, posture="stand", height=1.6, moving=True)
+            for i in range(5)
+        ]
+        current = make_fv(ts=2000, posture="lie", height=0.2, moving=False,
+                          centroid=(1.0, 1.0, 0.1))
+        history.append(current)
+
+        result = decoder.evaluate(current, history)
+        assert result is not None
+        assert result.anomaly_type == "fall"
+        assert result.source == "fallback"
+
+    def test_no_baseline_no_graph_returns_none_for_normal(self):
+        """无基线/无图时 → 正常帧不告警"""
+        decoder = AnomalyDecoder(fallback=FallbackEngine())
+        fv = make_fv()
+        result = decoder.evaluate(fv, [fv])
+        assert result is None
+
+    def test_spatial_awareness_bathroom_lie(self):
+        """卫生间躺卧 → 空间感知加权 → 异常分增加"""
+        decoder = AnomalyDecoder(fallback=FallbackEngine())
+        fvs_bathroom = [make_fv(room="bathroom", posture="lie",
+                                 centroid=(3, 3, 0.1), height=0.2)
+                        for _ in range(60)]
+        result = decoder.evaluate(fvs_bathroom[-1], fvs_bathroom)
+        # stillness 规则在卫生间触发
+        if result:
+            assert result.room == "bathroom"
+```
+
+- [ ] **Step 3: Run test (verify failure)** then implement
+
+- [ ] **Step 4: Implement `ai/decoders/anomaly.py`**
+
+```python
+"""异常 Decoder — 融合规则引擎 + 基线偏离 + 空间感知 → 最终异常分"""
+from ai.shared.types import FeatureVector, AnomalyResult
+from ai.fallback.rules import FallbackEngine
+
+
+class AnomalyDecoder:
+    """
+    异常解码器。MVP 版本主要靠 FallbackEngine。
+    随基线数据积累，baseline 异常分逐渐加入。
+    """
+
+    def __init__(
+        self,
+        fallback: FallbackEngine,
+        baseline=None,   # PersonalBaseline | None
+        graph=None,      # SpatialGraph | None
+        baseline_weight: float = 0.3,
+    ):
+        self.fallback = fallback
+        self.baseline = baseline
+        self.graph = graph
+        self.baseline_weight = baseline_weight
+
+    def evaluate(
+        self, fv: FeatureVector, history: list[FeatureVector]
+    ) -> AnomalyResult | None:
+        """
+        综合评估当前帧。
+        Returns: AnomalyResult（异常）或 None（正常）
+        """
+        # 1. 规则引擎（确定性安全网）
+        rule_results = self.fallback.evaluate(fv, history)
+
+        # 2. 基线偏离
+        baseline_score = 0.0
+        if self.baseline is not None and self.baseline.is_ready:
+            baseline_score = self.baseline.score(fv)
+
+        # 3. 空间感知加权
+        spatial_multiplier = 1.0
+        if self.graph is not None:
+            node_id = self.graph.locate(fv.centroid)
+            if node_id is not None:
+                attrs = self.graph.get_node_attrs(node_id)
+                # 高风险区域 + 躺卧 → 权重增加
+                risk = attrs.get("risk_score", 0.0)
+                if fv.posture == "lie" and risk > 0.3:
+                    spatial_multiplier = 1.0 + risk
+
+        # 4. 融合
+        if not rule_results and baseline_score < 0.7:
+            return None  # 无异常
+
+        # 取最严重的规则结果
+        severity_order = {"critical": 3, "warning": 2, "info": 1}
+        best_rule = None
+        if rule_results:
+            best_rule = max(rule_results, key=lambda r: severity_order.get(r.severity, 0))
+
+        # 融合分数
+        rule_score = best_rule.anomaly_score if best_rule else 0.0
+        combined_score = max(rule_score, baseline_score * spatial_multiplier)
+        combined_score = min(combined_score, 1.0)
+
+        # 确定来源和类型
+        if best_rule:
+            source = "both" if baseline_score > 0.5 else "fallback"
+            anomaly_type = best_rule.anomaly_type
+            severity = best_rule.severity
+            details = best_rule.details
+        else:
+            source = "baseline"
+            anomaly_type = "pattern_deviation"
+            severity = "warning" if combined_score > 0.8 else "info"
+            details = {"baseline_score": baseline_score}
+
+        details["spatial_multiplier"] = spatial_multiplier
+        details["baseline_score"] = baseline_score
+
+        return AnomalyResult(
+            ts=fv.ts, device_id=fv.device_id, room=fv.room,
+            anomaly_score=round(combined_score, 3),
+            anomaly_type=anomaly_type,
+            severity=severity, source=source,
+            details=details,
+        )
+```
+
+- [ ] **Step 5: Run tests**
+
+```bash
+cd /Users/eular/Desktop/housafe && python -m pytest ai/tests/test_anomaly.py -v
+```
+Expected: 3 passed
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add ai/decoders/__init__.py ai/decoders/anomaly.py ai/tests/test_anomaly.py
+git commit -m "feat(ai): add AnomalyDecoder — fuse fallback rules + baseline + spatial context
+
+Co-Authored-By: Claude <noreply@anthropic.com>"
+```
+
+---
+

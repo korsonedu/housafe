@@ -6,3 +6,24 @@ node_modules/
 .expo/
 *.sqlite3
 .DS_Store
+
+# 数据集与训练权重：体积大，按 README/docs 文档重新下载或训练
+ai/data/
+ai/checkpoints/*
+!ai/checkpoints/latent_baseline.pkl
+!ai/checkpoints/latent_baseline_drift.pkl
+*.pt
+*.pth
+
+# Office 临时/锁文件
+.~*
+~$*
+
+# LaTeX 构建中间产物
+paper/*.aux
+paper/*.fdb_latexmk
+paper/*.fls
+paper/*.log
+paper/*.out
+paper/*.xdv
+paper/*.synctex.gz

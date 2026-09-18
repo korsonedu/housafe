@@ -389,6 +389,77 @@ def run_batch(scenarios_dir: str, speed: float = 10.0, runs: int = 3,
     return results
 
 
+# ── 诊断：原始 predictor error 分布 ──────────────────
+
+def diagnose_predictor(yaml_path: str, speed: float = 10.0,
+                       params_path: str | None = None,
+                       dataset_path: str | None = None) -> dict:
+    """
+    逐帧输出 predictor error 和 GT 标签，用于评估 predictor 本身的区分度。
+    不依赖 Z-score 检测逻辑。
+    """
+    engine = ScenarioEngine(yaml_path, speed=speed,
+                            params_path=params_path, dataset_path=dataset_path)
+    frames = engine.run()
+
+    encoder, predictor, ok = load_world_model()
+    if not ok:
+        return {"error": "model_unavailable"}
+
+    wm = WorldModelInference(encoder, predictor)
+    errors = []
+    gt_types = []
+    timestamps = []
+
+    for fg in frames:
+        wm_points = fg.raw_points if fg.raw_points is not None else fg.points
+        if wm_points is not None and len(wm_points) > 0:
+            # 手动推进 WorldModelInference 但不依赖其 alert 逻辑
+            n = len(wm_points)
+            if n >= 4:
+                pts = wm._pad_to_64(wm_points)
+                wm._frame_buf.append(pts.astype(np.float32))
+                if len(wm._frame_buf) > wm.WINDOW:
+                    wm._frame_buf = wm._frame_buf[-wm.WINDOW:]
+
+                if len(wm._frame_buf) == wm.WINDOW:
+                    seq = np.stack(wm._frame_buf)
+                    seq_t = torch.from_numpy(seq).unsqueeze(0)
+                    with torch.no_grad():
+                        out = encoder(seq_t)
+                        S = out["S"]
+                        pred_out = predictor(S[:, :-1])
+                        error = 1.0 - torch_F.cosine_similarity(pred_out, S[:, -1], dim=-1)
+                        errors.append(float(error.item()))
+                        gt_types.append(fg.gt.anomaly_type if fg.gt else None)
+                        timestamps.append(fg.ts)
+
+    errors = np.array(errors)
+    gt_types_arr = np.array(gt_types)
+    is_anomaly = np.array([t is not None for t in gt_types_arr])
+
+    normal_err = errors[~is_anomaly] if (~is_anomaly).any() else np.array([])
+    anomaly_err = errors[is_anomaly] if is_anomaly.any() else np.array([])
+
+    from sklearn.metrics import roc_auc_score as _roc_auc
+    auc = _roc_auc(is_anomaly.astype(int), errors) if is_anomaly.any() and (~is_anomaly).any() else 0.0
+
+    return {
+        "scenario": engine._scenario_name,
+        "n_frames": len(errors),
+        "n_normal": int((~is_anomaly).sum()),
+        "n_anomaly": int(is_anomaly.sum()),
+        "error_mean": float(errors.mean()),
+        "error_std": float(errors.std()),
+        "normal_error_mean": float(normal_err.mean()) if len(normal_err) > 0 else 0,
+        "normal_error_std": float(normal_err.std()) if len(normal_err) > 0 else 0,
+        "anomaly_error_mean": float(anomaly_err.mean()) if len(anomaly_err) > 0 else 0,
+        "anomaly_error_std": float(anomaly_err.std()) if len(anomaly_err) > 0 else 0,
+        "auc": auc,
+        "ratio": float(anomaly_err.mean() / (normal_err.mean() + 1e-10)) if len(anomaly_err) > 0 and len(normal_err) > 0 else 0,
+    }
+
+
 # ── CLI ──────────────────────────────────────────────
 
 def main():
@@ -409,6 +480,12 @@ def main():
     p_batch.add_argument("--params")
     p_batch.add_argument("--dataset")
 
+    p_diag = sub.add_parser("diagnose")
+    p_diag.add_argument("scenario")
+    p_diag.add_argument("--speed", type=float, default=10.0)
+    p_diag.add_argument("--params")
+    p_diag.add_argument("--dataset")
+
     args = parser.parse_args()
 
     if args.command == "run":
@@ -424,6 +501,12 @@ def main():
     elif args.command == "batch":
         run_batch(args.scenarios_dir, speed=args.speed, runs=args.runs,
                   params_path=args.params, dataset_path=args.dataset)
+
+    elif args.command == "diagnose":
+        result = diagnose_predictor(args.scenario, speed=args.speed,
+                                    params_path=args.params, dataset_path=args.dataset)
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+
     else:
         parser.print_help()
 
